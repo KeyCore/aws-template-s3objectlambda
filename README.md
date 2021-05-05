@@ -15,5 +15,5 @@ This template will create the following resources:
 ### Step-by-step
 1. Deploy the yaml template on AWS, using either the cli or console
 2. Upload a sample txt file to the newly created S3 bucket
-3. Modify the s3ObjectLambda-test.py with your bucket name and your access point
-4. Run python script amd observe the print outs
+3. Modify the s3ObjectLambda-test.py with your bucket name, object key and your access point ARN
+4. Run python script and observe the print outs
