@@ -1,0 +1,139 @@
+Parameters:
+  LambdaFunctionName:
+    Type: String
+    AllowedPattern: "[a-zA-Z0-9]+[a-zA-Z0-9-]+[a-zA-Z0-9]+"
+    Default: my-lambda-function
+  S3ObjectLambdaAPName:
+    Type: String
+    AllowedPattern: "[a-zA-Z0-9]+[a-zA-Z0-9-]+[a-zA-Z0-9]+"
+    Default: my-object-lambda-ap
+
+Resources:
+  S3Bucket:
+    Type: 'AWS::S3::Bucket'
+  S3BucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action: '*'
+            Effect: Allow
+            Resource:
+              - !GetAtt
+                - S3Bucket
+                - Arn
+              - !Join
+                - ''
+                - - !GetAtt
+                    - S3Bucket
+                    - Arn
+                  - /*
+            Principal:
+              AWS: '*'
+            Condition:
+              StringEquals:
+                's3:DataAccessPointAccount': !Ref 'AWS::AccountId'
+  
+
+  S3AccessPoint:
+    Type: 'AWS::S3::AccessPoint'
+    Properties:
+      Bucket: !Ref S3Bucket
+      Name: mys3accesspoint
+      
+  S3ObjectLambda:
+    Type: AWS::S3ObjectLambda::AccessPoint
+    Properties:
+      Name: !Ref S3ObjectLambdaAPName
+      ObjectLambdaConfiguration:
+        SupportingAccessPoint: !Join
+          - ''
+          - - 'arn:'
+            - !Ref AWS::Partition
+            - ':s3:'
+            - !Ref AWS::Region
+            - ':'
+            - !Ref AWS::AccountId
+            - ':accesspoint/'
+            - !Ref S3AccessPoint
+        TransformationConfigurations: 
+          - Actions: 
+            - GetObject
+            ContentTransformation:
+              AwsLambda: 
+                FunctionArn: !GetAtt S3ObjectLambdaFunction.Arn
+  
+  S3ObjectLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: 'index.handler'        
+      Code:
+        ZipFile: |
+          import boto3
+          from botocore.vendored import requests
+
+          def handler(event, context):
+              print(event)
+
+              object_get_context = event["getObjectContext"]
+              request_route = object_get_context["outputRoute"]
+              request_token = object_get_context["outputToken"]
+              s3_url = object_get_context["inputS3Url"]
+
+              # Get object from S3
+              print(s3_url)
+              response = requests.get(s3_url)
+              original_object = response.content.decode('utf-8')
+
+              # Transform object
+              transformed_object = original_object.upper()
+
+              # Write object back to S3 Object Lambda
+              s3 = boto3.client('s3')
+              s3.write_get_object_response(
+                  Body=transformed_object,
+                  RequestRoute=request_route,
+                  RequestToken=request_token)
+
+              return {'status_code': 200}
+      Role: !GetAtt LambdaIAMRole.Arn
+      Runtime: python3.7
+      Timeout: 45
+      FunctionName: !Ref LambdaFunctionName
+
+  LambdaIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      Policies:
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${LambdaFunctionName}:*
+              - Action:
+                  - s3-object-lambda:WriteGetObjectResponse
+                Effect: Allow
+                Resource: 
+                  - !Sub arn:aws:s3-object-lambda:${AWS::Region}:${AWS::AccountId}:accesspoint/${S3ObjectLambdaAPName}
+              
+          PolicyName: lambda
+Outputs:
+  S3ObjectLambdaArn:
+    Value: !GetAtt  S3ObjectLambda.Arn
+    Description: ARN of the sample Amazon S3 object lambda access point.
